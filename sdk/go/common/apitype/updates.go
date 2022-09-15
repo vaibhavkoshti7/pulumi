@@ -259,3 +259,32 @@ type StackRenameRequest struct {
 	NewName    string `json:"newName"`
 	NewProject string `json:"newProject"`
 }
+
+type Activity struct {
+	Update     *UpdateInfo                   `json:"update,omitempty"`
+	Deployment *DeploymentWithRelatedUpdates `json:"deployment,omitempty"`
+}
+
+type ActivityUpdateInfo struct {
+	UpdateInfo `json:"info"`
+
+	// UpdateID is the underlying Update's ID on the PPC.
+	UpdateID string `json:"updateID"`
+
+	// Version of the stack that this UpdateInfo describe.
+	Version int `json:"version"`
+	// LatestVersion of the stack in general. i.e. the latest when Version == LatestVersion.
+	LatestVersion int `json:"latestVersion"`
+}
+
+type DeploymentWithRelatedUpdates struct {
+	GetDeploymentResponse
+	Updates []ActivityUpdateInfo `json:"updates"`
+}
+
+// GetStackActivityResponse is the Service-centric view of a Program's activity history (deployments and updates).
+type GetStackActivityResponse struct {
+	Activity     []Activity `json:"activity"`
+	ItemsPerPage int        `json:"itemsPerPage"`
+	Total        int        `json:"total"`
+}

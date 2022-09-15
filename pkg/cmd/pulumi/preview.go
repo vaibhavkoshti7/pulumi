@@ -44,6 +44,15 @@ func newPreviewCmd() *cobra.Command {
 	var planFilePath string
 	var showSecrets bool
 
+	// Flags for remote operations.
+	var remote bool
+	var envVars []string
+	var preRunCommands []string
+	var gitRepoURL string
+	var gitBranch string
+	var gitRepoDir string
+	var gitAuthAccessToken string
+
 	// Flags for engine.UpdateOptions.
 	var jsonDisplay bool
 	var policyPackPaths []string
@@ -108,6 +117,15 @@ func newPreviewCmd() *cobra.Command {
 			} else {
 				displayOpts.SuppressPermalink = false
 			}
+
+			if remote {
+				// TODO
+				return result.FromError(errors.New("remote preview hasn't been hooked up yet"))
+				// opts := backend.UpdateOptions{Display: displayOpts}
+				// return createDeployment(ctx, opts, apitype.Update, stack, envVars, preRunCommands, gitRepoURL,
+				// 	gitBranch, gitRepoDir, gitAuthAccessToken)
+			}
+
 			filestateBackend, err := isFilestateBackend(displayOpts)
 			if err != nil {
 				return result.FromError(err)
@@ -321,6 +339,34 @@ func newPreviewCmd() *cobra.Command {
 		&suppressPermalink, "suppress-permalink", "",
 		"Suppress display of the state permalink")
 	cmd.Flag("suppress-permalink").NoOptDefVal = "false"
+
+	// Remote flags
+	if hasExperimentalCommands() {
+		cmd.PersistentFlags().BoolVar(
+			&remote, "remote", false,
+			"Run the operation remotely")
+		cmd.PersistentFlags().StringArrayVar(
+			&envVars, "env", []string{},
+			"Environment variables to use in the remote operation")
+		cmd.PersistentFlags().StringArrayVar(
+			&preRunCommands, "pre-run-command", []string{},
+			"PreRunCommands to run before the remote operation")
+		// TODO rather than exposing URL/branch/dir as flags, reuse the existing [template|URL] arg,
+		// and allow additional args for branch and repo dir.
+		cmd.PersistentFlags().StringVar(
+			&gitRepoURL, "git-repo-url", "",
+			"Git repo URL")
+		cmd.PersistentFlags().StringVar(
+			&gitBranch, "git-branch", "",
+			"Git branch")
+		cmd.PersistentFlags().StringVar(
+			&gitRepoDir, "git-repo-dir", "",
+			"Git repo directory")
+		cmd.PersistentFlags().StringVar(
+			&gitAuthAccessToken, "git-auth-access-token", "",
+			"Git auth access token")
+		// TODO add flags for the other git-related auth options.
+	}
 
 	if hasDebugCommands() {
 		cmd.PersistentFlags().StringVar(

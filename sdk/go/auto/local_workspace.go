@@ -51,6 +51,8 @@ type LocalWorkspace struct {
 	envvars         map[string]string
 	secretsProvider string
 	pulumiVersion   semver.Version
+	repo            *GitRepo
+	remote          bool
 }
 
 var settingsExtensions = []string{".yaml", ".yml", ".json"}
@@ -319,6 +321,9 @@ func (l *LocalWorkspace) CreateStack(ctx context.Context, stackName string) erro
 	if l.secretsProvider != "" {
 		args = append(args, "--secrets-provider", l.secretsProvider)
 	}
+	if l.remote {
+		args = append(args, "--disable-select")
+	}
 	stdout, stderr, errCode, err := l.runPulumiCmdSync(ctx, args...)
 	if err != nil {
 		return newAutoError(errors.Wrap(err, "failed to create stack"), stdout, stderr, errCode)
@@ -578,7 +583,7 @@ func NewLocalWorkspace(ctx context.Context, opts ...LocalWorkspaceOption) (Works
 		workDir = dir
 	}
 
-	if lwOpts.Repo != nil {
+	if lwOpts.Repo != nil && !lwOpts.Remote {
 		// now do the git clone
 		projDir, err := setupGitRepo(ctx, workDir, lwOpts.Repo)
 		if err != nil {
@@ -596,6 +601,8 @@ func NewLocalWorkspace(ctx context.Context, opts ...LocalWorkspaceOption) (Works
 		workDir:    workDir,
 		program:    program,
 		pulumiHome: lwOpts.PulumiHome,
+		remote:     lwOpts.Remote,
+		repo:       lwOpts.Repo,
 	}
 
 	// optOut indicates we should skip the version check.
@@ -627,7 +634,7 @@ func NewLocalWorkspace(ctx context.Context, opts ...LocalWorkspaceOption) (Works
 	}
 
 	// setup
-	if lwOpts.Repo != nil && lwOpts.Repo.Setup != nil {
+	if !lwOpts.Remote && lwOpts.Repo != nil && lwOpts.Repo.Setup != nil {
 		err := lwOpts.Repo.Setup(ctx, l)
 		if err != nil {
 			return nil, errors.Wrap(err, "error while running setup function")
@@ -640,6 +647,7 @@ func NewLocalWorkspace(ctx context.Context, opts ...LocalWorkspaceOption) (Works
 	}
 
 	// Environment values
+	// TODO for Remote
 	if lwOpts.EnvVars != nil {
 		if err := setEnvVars(l, lwOpts.EnvVars); err != nil {
 			return nil, errors.Wrap(err, "failed to set environment values")
@@ -670,6 +678,8 @@ type localWorkspaceOptions struct {
 	// EnvVars is a map of environment values scoped to the workspace.
 	// These values will be passed to all Workspace and Stack level commands.
 	EnvVars map[string]string
+
+	Remote bool
 }
 
 // LocalWorkspaceOption is used to customize and configure a LocalWorkspace at initialization time.
@@ -789,6 +799,12 @@ func EnvVars(envvars map[string]string) LocalWorkspaceOption {
 	})
 }
 
+func remote(remote bool) LocalWorkspaceOption {
+	return localWorkspaceOption(func(lo *localWorkspaceOptions) {
+		lo.Remote = remote
+	})
+}
+
 // NewStackLocalSource creates a Stack backed by a LocalWorkspace created on behalf of the user,
 // from the specified WorkDir. This Workspace will pick up
 // any available Settings files (Pulumi.yaml, Pulumi.<stack>.yaml).
@@ -897,6 +913,72 @@ func SelectStackRemoteSource(
 	}
 
 	return SelectStack(ctx, stackName, w)
+}
+
+// NewRemoteStackGitSource TODO doc comment
+func NewRemoteStackGitSource(
+	ctx context.Context,
+	stackName string, repo GitRepo, // TODO use a separate RemoteGitRepo struct
+	opts ...LocalWorkspaceOption, // TODO pared-down Remote options
+) (Stack, error) {
+	opts = append(opts, remote(true))
+	opts = append(opts, Repo(repo))
+	w, err := NewLocalWorkspace(ctx, opts...)
+	var stack Stack
+	if err != nil {
+		return stack, errors.Wrap(err, "failed to create stack")
+	}
+
+	return NewStack(ctx, stackName, w)
+}
+
+// UpsertRemoteStackGitSource TODO doc comment
+func UpsertRemoteStackGitSource(
+	ctx context.Context,
+	stackName string, repo GitRepo, // TODO use a separate RemoteGitRepo struct
+	opts ...LocalWorkspaceOption, // TODO pared-down Remote options
+) (Stack, error) {
+	opts = append(opts, remote(true))
+	opts = append(opts, Repo(repo))
+	w, err := NewLocalWorkspace(ctx, opts...)
+	var stack Stack
+	if err != nil {
+		return stack, errors.Wrap(err, "failed to create stack")
+	}
+
+	s, err := NewStack(ctx, stackName, w)
+	// error for all failures except if the stack already exists, as we'll
+	// just select the stack if it exists.
+	if err != nil && !IsCreateStack409Error(err) {
+		return s, err
+	}
+
+	stack = Stack{
+		workspace: w,
+		stackName: stackName,
+	}
+	return stack, nil
+}
+
+// SelectRemoteStackGitSource TODO doc comment
+func SelectRemoteStackGitSource(
+	ctx context.Context,
+	stackName string, repo GitRepo, // TODO use a separate RemoteGitRepo struct
+	opts ...LocalWorkspaceOption, // TODO pared-down Remote options
+) (Stack, error) {
+	opts = append(opts, remote(true))
+	opts = append(opts, Repo(repo))
+	w, err := NewLocalWorkspace(ctx, opts...)
+	var stack Stack
+	if err != nil {
+		return stack, errors.Wrap(err, "failed to select stack")
+	}
+
+	stack = Stack{
+		workspace: w,
+		stackName: stackName,
+	}
+	return stack, nil
 }
 
 // NewStackInlineSource creates a Stack backed by a LocalWorkspace created on behalf of the user,

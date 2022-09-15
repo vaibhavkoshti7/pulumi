@@ -384,6 +384,9 @@ func (s *Stack) Up(ctx context.Context, opts ...optup.Option) (UpResult, error) 
 		sharedArgs = append(sharedArgs, fmt.Sprintf("--plan=%s", upOpts.Plan))
 	}
 
+	// Apply the remote args, if needed.
+	sharedArgs = append(sharedArgs, s.remoteArgs()...)
+
 	kind, args := constant.ExecKindAutoLocal, []string{"up", "--yes", "--skip-preview"}
 	if program := s.Workspace().Program(); program != nil {
 		server, err := startLanguageRuntimeServer(program)
@@ -417,13 +420,17 @@ func (s *Stack) Up(ctx context.Context, opts ...optup.Option) (UpResult, error) 
 		return res, err
 	}
 
-	historyOpts := []opthistory.Option{}
-	if upOpts.ShowSecrets != nil {
-		historyOpts = append(historyOpts, opthistory.ShowSecrets(*upOpts.ShowSecrets))
-	}
-	history, err := s.History(ctx, 1 /*pageSize*/, 1 /*page*/, historyOpts...)
-	if err != nil {
-		return res, err
+	// TODO fix history for remote.
+	var history []UpdateSummary
+	if !s.isRemote() {
+		historyOpts := []opthistory.Option{}
+		if upOpts.ShowSecrets != nil {
+			historyOpts = append(historyOpts, opthistory.ShowSecrets(*upOpts.ShowSecrets))
+		}
+		history, err = s.History(ctx, 1 /*pageSize*/, 1 /*page*/, historyOpts...)
+		if err != nil {
+			return res, err
+		}
 	}
 
 	res = UpResult{
@@ -567,6 +574,9 @@ func (s *Stack) Destroy(ctx context.Context, opts ...optdestroy.Option) (Destroy
 		args = append(args, "--event-log", t.Filename)
 	}
 
+	// Apply the remote args, if needed.
+	args = append(args, s.remoteArgs()...)
+
 	stdout, stderr, code, err := s.runPulumiCmdSync(
 		ctx,
 		destroyOpts.ProgressStreams,      /* additionalOutputs */
@@ -577,13 +587,17 @@ func (s *Stack) Destroy(ctx context.Context, opts ...optdestroy.Option) (Destroy
 		return res, newAutoError(errors.Wrap(err, "failed to destroy stack"), stdout, stderr, code)
 	}
 
-	historyOpts := []opthistory.Option{}
-	if showSecrets := destroyOpts.ShowSecrets; showSecrets != nil {
-		historyOpts = append(historyOpts, opthistory.ShowSecrets(*showSecrets))
-	}
-	history, err := s.History(ctx, 1 /*pageSize*/, 1 /*page*/, historyOpts...)
-	if err != nil {
-		return res, errors.Wrap(err, "failed to destroy stack")
+	// TODO fix history for remote.
+	var history []UpdateSummary
+	if !s.isRemote() {
+		historyOpts := []opthistory.Option{}
+		if showSecrets := destroyOpts.ShowSecrets; showSecrets != nil {
+			historyOpts = append(historyOpts, opthistory.ShowSecrets(*showSecrets))
+		}
+		history, err = s.History(ctx, 1 /*pageSize*/, 1 /*page*/, historyOpts...)
+		if err != nil {
+			return res, errors.Wrap(err, "failed to destroy stack")
+		}
 	}
 
 	var summary UpdateSummary
@@ -609,10 +623,6 @@ func (s *Stack) Outputs(ctx context.Context) (OutputMap, error) {
 // (up/preview/refresh/destroy).
 func (s *Stack) History(ctx context.Context,
 	pageSize int, page int, opts ...opthistory.Option) ([]UpdateSummary, error) {
-	err := s.Workspace().SelectStack(ctx, s.Name())
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to get stack history")
-	}
 	var options opthistory.Options
 	for _, opt := range opts {
 		opt.ApplyOption(&options)
@@ -876,6 +886,16 @@ func (s *Stack) runPulumiCmdSync(
 	var env []string
 	debugEnv := fmt.Sprintf("%s=%s", "PULUMI_DEBUG_COMMANDS", "true")
 	env = append(env, debugEnv)
+
+	var remote bool
+	if lws, isLocalWorkspace := s.Workspace().(*LocalWorkspace); isLocalWorkspace {
+		remote = lws.remote
+	}
+	if remote {
+		experimentalEnv := fmt.Sprintf("%s=%s", "PULUMI_EXPERIMENTAL", "true")
+		env = append(env, experimentalEnv)
+	}
+
 	if s.Workspace().PulumiHome() != "" {
 		homeEnv := fmt.Sprintf("%s=%s", pulumiHomeEnv, s.Workspace().PulumiHome())
 		env = append(env, homeEnv)
@@ -909,6 +929,53 @@ func (s *Stack) runPulumiCmdSync(
 		return stdout, stderr, errCode, errors.Wrap(err, "command ran successfully, but error running PostCommandCallback")
 	}
 	return stdout, stderr, errCode, nil
+}
+
+func (s *Stack) isRemote() bool {
+	var remote bool
+	if lws, isLocalWorkspace := s.Workspace().(*LocalWorkspace); isLocalWorkspace {
+		remote = lws.remote
+	}
+	return remote
+}
+
+func (s *Stack) remoteArgs() []string {
+	var remote bool
+	var repo *GitRepo
+	if lws, isLocalWorkspace := s.Workspace().(*LocalWorkspace); isLocalWorkspace {
+		remote = lws.remote
+		repo = lws.repo
+	}
+	if !remote {
+		return nil
+	}
+
+	var args []string
+	args = append(args, "--remote")
+	if repo != nil {
+		if repo.URL != "" {
+			args = append(args, fmt.Sprintf("--git-repo-url=%s", repo.URL))
+		}
+		if repo.Branch != "" {
+			args = append(args, fmt.Sprintf("--git-branch=%s", repo.Branch))
+		}
+		if repo.ProjectPath != "" {
+			args = append(args, fmt.Sprintf("--git-repo-dir=%s", repo.ProjectPath))
+		}
+		if repo.Auth != nil {
+			if repo.Auth.PersonalAccessToken != "" {
+				args = append(args, fmt.Sprintf("--git-auth-access-token=%s", repo.Auth.PersonalAccessToken))
+			}
+		}
+	}
+	if envvars := s.Workspace().GetEnvVars(); envvars != nil {
+		for k, v := range envvars {
+			args = append(args, fmt.Sprintf("--env=%s=%s", k, v))
+		}
+	}
+	// TODO preruncommands
+
+	return args
 }
 
 const (

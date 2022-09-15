@@ -21,14 +21,17 @@ import (
 	"io/ioutil"
 	"math"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/pulumi/pulumi/pkg/v3/backend"
 	"github.com/pulumi/pulumi/pkg/v3/backend/display"
+	"github.com/pulumi/pulumi/pkg/v3/backend/httpstate"
 	"github.com/pulumi/pulumi/pkg/v3/engine"
 	"github.com/pulumi/pulumi/pkg/v3/resource/deploy"
 	"github.com/pulumi/pulumi/pkg/v3/resource/stack"
+	"github.com/pulumi/pulumi/sdk/v3/go/common/apitype"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/resource"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/resource/config"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/tokens"
@@ -42,6 +45,60 @@ const (
 	defaultParallel = math.MaxInt32
 )
 
+// TODO fold this more into the backend; accept args as a struct.
+func createDeployment(ctx context.Context, opts backend.UpdateOptions, operation apitype.PulumiOperation, stack string,
+	envVars, preRunCommands []string, gitRepoURL, gitBranch, gitRepoDir, gitAuthAccessToken string) result.Result {
+
+	b, err := currentBackend(ctx, opts.Display)
+	if err != nil {
+		return result.FromError(err)
+	}
+
+	// Do a type assertion in order to determine if this is a cloud backend based on whether the assertion
+	// succeeds or not.
+	cb, isCloud := b.(httpstate.Backend)
+	if !isCloud {
+		// TODO better error message
+		return result.FromError(fmt.Errorf("using the Pulumi Service is required for remote operations: %w", err))
+	}
+
+	stackRef, err := b.ParseStackReference(stack)
+	if err != nil {
+		return result.FromError(err)
+	}
+
+	env := map[string]string{}
+	for _, e := range envVars {
+		kvp := strings.SplitN(e, "=", 2)
+		k, v := kvp[0], kvp[1]
+		env[k] = v
+	}
+
+	req := apitype.CreateDeploymentRequest{
+		Source: &apitype.SourceContext{
+			Git: &apitype.SourceContextGit{
+				RepoURL: gitRepoURL,
+				Branch:  gitBranch,
+				RepoDir: gitRepoDir,
+				GitAuth: &apitype.GitAuthConfig{
+					PersonalAccessToken: &gitAuthAccessToken,
+				},
+			},
+		},
+		Operation: apitype.OperationContext{
+			Operation:            operation,
+			PreRunCommands:       preRunCommands,
+			EnvironmentVariables: env,
+		},
+	}
+	err = cb.CreateDeployment(ctx, stackRef, req, opts)
+	if err != nil {
+		return result.FromError(err)
+	}
+
+	return nil
+}
+
 // intentionally disabling here for cleaner err declaration/assignment.
 // nolint: vetshadow
 func newUpCmd() *cobra.Command {
@@ -54,6 +111,15 @@ func newUpCmd() *cobra.Command {
 	var configArray []string
 	var path bool
 	var client string
+
+	// Flags for remote operations.
+	var remote bool
+	var envVars []string
+	var preRunCommands []string
+	var gitRepoURL string
+	var gitBranch string
+	var gitRepoDir string
+	var gitAuthAccessToken string
 
 	// Flags for engine.UpdateOptions.
 	var jsonDisplay bool
@@ -401,6 +467,12 @@ func newUpCmd() *cobra.Command {
 		Args: cmdutil.MaximumNArgs(1),
 		Run: cmdutil.RunResultFunc(func(cmd *cobra.Command, args []string) result.Result {
 			ctx := commandContext()
+
+			// Remote implies we're skipping previews.
+			if remote {
+				skipPreview = true
+			}
+
 			yes = yes || skipPreview || skipConfirmations()
 
 			interactive := cmdutil.Interactive()
@@ -444,6 +516,11 @@ func newUpCmd() *cobra.Command {
 				opts.Display.SuppressPermalink = true
 			} else {
 				opts.Display.SuppressPermalink = false
+			}
+
+			if remote {
+				return createDeployment(ctx, opts, apitype.Update, stack, envVars, preRunCommands, gitRepoURL,
+					gitBranch, gitRepoDir, gitAuthAccessToken)
 			}
 
 			filestateBackend, err := isFilestateBackend(opts.Display)
@@ -571,6 +648,34 @@ func newUpCmd() *cobra.Command {
 			"of sames).")
 	if !hasExperimentalCommands() {
 		contract.AssertNoError(cmd.PersistentFlags().MarkHidden("plan"))
+	}
+
+	// Remote flags
+	if hasExperimentalCommands() {
+		cmd.PersistentFlags().BoolVar(
+			&remote, "remote", false,
+			"Run the operation remotely")
+		cmd.PersistentFlags().StringArrayVar(
+			&envVars, "env", []string{},
+			"Environment variables to use in the remote operation")
+		cmd.PersistentFlags().StringArrayVar(
+			&preRunCommands, "pre-run-command", []string{},
+			"PreRunCommands to run before the remote operation")
+		// TODO rather than exposing URL/branch/dir as flags, reuse the existing [template|URL] arg,
+		// and allow additional args for branch and repo dir.
+		cmd.PersistentFlags().StringVar(
+			&gitRepoURL, "git-repo-url", "",
+			"Git repo URL")
+		cmd.PersistentFlags().StringVar(
+			&gitBranch, "git-branch", "",
+			"Git branch")
+		cmd.PersistentFlags().StringVar(
+			&gitRepoDir, "git-repo-dir", "",
+			"Git repo directory")
+		cmd.PersistentFlags().StringVar(
+			&gitAuthAccessToken, "git-auth-access-token", "",
+			"Git auth access token")
+		// TODO add flags for the other git-related auth options.
 	}
 
 	if hasDebugCommands() {

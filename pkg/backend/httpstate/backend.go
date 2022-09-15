@@ -109,6 +109,10 @@ type Backend interface {
 
 	StackConsoleURL(stackRef backend.StackReference) (string, error)
 	Client() *client.Client
+
+	// TODO this is temporary. Fold it back inside the backend implementation
+	CreateDeployment(ctx context.Context, stackRef backend.StackReference, req apitype.CreateDeploymentRequest,
+		opts backend.UpdateOptions) error
 }
 
 type cloudBackend struct {
@@ -1592,6 +1596,157 @@ func (b *cloudBackend) UpdateStackTags(ctx context.Context,
 	}
 
 	return b.client.UpdateStackTags(ctx, stackID, tags)
+}
+
+const (
+	vt100Bold  = "\x1b[1m"
+	vt100Reset = "\x1b[m"
+)
+
+func (b *cloudBackend) CreateDeployment(ctx context.Context, stackRef backend.StackReference,
+	req apitype.CreateDeploymentRequest, opts backend.UpdateOptions) error {
+
+	stackID, err := b.getCloudStackIdentifier(stackRef)
+	if err != nil {
+		return err
+	}
+
+	resp, err := b.client.CreateDeployment(ctx, stackID, req)
+	if err != nil {
+		return err
+	}
+	id := resp.ID
+
+	fmt.Printf(vt100Bold + "Deployment started...\n" + vt100Reset)
+
+	token := ""
+	for {
+		logs, err := b.client.GetDeploymentLogs(ctx, stackID, id, token)
+		if err != nil {
+			return err
+		}
+
+		for _, l := range logs.Lines {
+			if l.Header != "" {
+				fmt.Printf(vt100Bold+"\n%s:\n"+vt100Reset, l.Header)
+				// Super hacky, but if we see it's a Pulumi operation, rather than outputting the deployment logs
+				// find the associated update and show the normal rendering of the operation's events.
+				if l.Header == "Pulumi operation" {
+					fmt.Println()
+					err = b.showDeploymentEvents(ctx, stackID, apitype.UpdateKind(req.Operation.Operation), id, opts)
+					if err != nil {
+						return err
+					}
+					return nil
+				}
+			} else {
+				// TODO do we want to show the timestamp, or only show it if a specific flag is specified?
+				fmt.Print(l.Line)
+			}
+		}
+
+		// If there are no more logs for the deployment and the deployment has finished or we're not following,
+		// then we're done.
+		if logs.NextToken == "" {
+			break
+		}
+
+		// Otherwise, update the token, sleep, and loop around.
+		if logs.NextToken == token {
+			time.Sleep(500 * time.Millisecond)
+		}
+		token = logs.NextToken
+	}
+
+	return nil
+}
+
+func (b *cloudBackend) showDeploymentEvents(ctx context.Context, stackID client.StackIdentifier,
+	kind apitype.UpdateKind, deploymentID string, opts backend.UpdateOptions) error {
+
+	getUpdateIDVersion := func() (string, int, error) {
+		var tries int
+		for tries < 10 {
+			activity, err := b.client.GetStackActivity(ctx, stackID, 10, 1)
+			if err != nil {
+				return "", 0, err
+			}
+
+			for _, a := range activity {
+				if a.Deployment != nil && a.Deployment.ID == deploymentID && len(a.Deployment.Updates) > 0 {
+					for _, update := range a.Deployment.Updates {
+						if update.UpdateID != "" {
+							return update.UpdateID, update.Version, nil
+						}
+					}
+				}
+			}
+
+			time.Sleep(500 * time.Millisecond)
+			tries++
+		}
+		return "", 0, fmt.Errorf("could not find update associated with deployment %s", deploymentID)
+	}
+
+	updateID, version, err := getUpdateIDVersion()
+	if err != nil {
+		return err
+	}
+
+	dryRun := kind == apitype.PreviewUpdate
+	update := client.UpdateIdentifier{
+		StackIdentifier: stackID,
+		UpdateKind:      kind,
+		UpdateID:        updateID,
+	}
+
+	if !opts.Display.SuppressPermalink && !opts.Display.JSONDisplay {
+		var link string
+		base := b.cloudConsoleStackPath(update.StackIdentifier)
+		if !dryRun {
+			link = b.CloudConsoleURL(base, "updates", strconv.Itoa(version))
+		} else {
+			link = b.CloudConsoleURL(base, "previews", update.UpdateID)
+		}
+		if link != "" {
+			fmt.Printf(opts.Display.Color.Colorize(
+				colors.SpecHeadline+"View Live: "+
+					colors.Underline+colors.BrightBlue+"%s"+colors.Reset+"\n\n"), link)
+		}
+	}
+
+	events := make(chan engine.Event) // Note: unbuffered, but we assume it won't matter in practice.
+	done := make(chan bool)
+
+	go display.ShowEvents(
+		backend.ActionLabel(kind, dryRun), kind, tokens.Name(stackID.Stack), tokens.PackageName(stackID.Project),
+		events, done, opts.Display, dryRun)
+
+	// The UpdateEvents API returns a continuation token to only get events after the previous call.
+	var continuationToken *string
+	for {
+		resp, err := b.client.GetUpdateEngineEvents(ctx, update, continuationToken)
+		if err != nil {
+			return err
+		}
+		for _, jsonEvent := range resp.Events {
+			event, err := display.ConvertJSONEvent(jsonEvent)
+			if err != nil {
+				return err
+			}
+			events <- event
+		}
+
+		continuationToken = resp.ContinuationToken
+		// A nil continuation token means there are no more events to read and the update has finished.
+		if continuationToken == nil {
+			close(events)
+			<-done
+			return nil
+		}
+
+		time.Sleep(500 * time.Millisecond)
+	}
 }
 
 type httpstateBackendClient struct {

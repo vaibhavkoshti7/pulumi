@@ -211,9 +211,13 @@ func createStack(ctx context.Context,
 		return nil, fmt.Errorf("could not create stack: %w", err)
 	}
 
-	if err := createSecretsManager(ctx, stack, secretsProvider,
-		false /* rotateSecretsManager */); err != nil {
-		return nil, err
+	// TODO: Fix this. It isn't quite right. We want to be resilient about not having a
+	// project file with --stack is used.
+	if setCurrent {
+		if err := createSecretsManager(ctx, stack, secretsProvider,
+			false /* rotateSecretsManager */); err != nil {
+			return nil, err
+		}
 	}
 
 	if setCurrent {

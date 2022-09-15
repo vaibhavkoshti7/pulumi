@@ -29,6 +29,7 @@ import (
 	"github.com/pulumi/pulumi/pkg/v3/backend/display"
 	"github.com/pulumi/pulumi/pkg/v3/engine"
 	"github.com/pulumi/pulumi/pkg/v3/resource/deploy"
+	"github.com/pulumi/pulumi/sdk/v3/go/common/apitype"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/diag/colors"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/resource"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/util/cmdutil"
@@ -42,6 +43,15 @@ func newRefreshCmd() *cobra.Command {
 	var execKind string
 	var execAgent string
 	var stack string
+
+	// Flags for remote operations.
+	var remote bool
+	var envVars []string
+	var preRunCommands []string
+	var gitRepoURL string
+	var gitBranch string
+	var gitRepoDir string
+	var gitAuthAccessToken string
 
 	// Flags for engine.UpdateOptions.
 	var jsonDisplay bool
@@ -77,6 +87,12 @@ func newRefreshCmd() *cobra.Command {
 		Args: cmdutil.NoArgs,
 		Run: cmdutil.RunResultFunc(func(cmd *cobra.Command, args []string) result.Result {
 			ctx := commandContext()
+
+			// Remote implies we're skipping previews.
+			if remote {
+				skipPreview = true
+			}
+
 			yes = yes || skipPreview || skipConfirmations()
 			interactive := cmdutil.Interactive()
 			if !interactive && !yes {
@@ -113,6 +129,11 @@ func newRefreshCmd() *cobra.Command {
 				opts.Display.SuppressPermalink = true
 			} else {
 				opts.Display.SuppressPermalink = false
+			}
+
+			if remote {
+				return createDeployment(ctx, opts, apitype.Refresh, stack, envVars, preRunCommands, gitRepoURL,
+					gitBranch, gitRepoDir, gitAuthAccessToken)
 			}
 
 			filestateBackend, err := isFilestateBackend(opts.Display)
@@ -300,6 +321,34 @@ func newRefreshCmd() *cobra.Command {
 	importPendingCreates = cmd.PersistentFlags().StringArray(
 		"import-pending-creates", nil,
 		"A list of form [[URN ID]...] describing the provider IDs of pending creates")
+
+	// Remote flags
+	if hasExperimentalCommands() {
+		cmd.PersistentFlags().BoolVar(
+			&remote, "remote", false,
+			"Run the operation remotely")
+		cmd.PersistentFlags().StringArrayVar(
+			&envVars, "env", []string{},
+			"Environment variables to use in the remote operation")
+		cmd.PersistentFlags().StringArrayVar(
+			&preRunCommands, "pre-run-command", []string{},
+			"PreRunCommands to run before the remote operation")
+		// TODO rather than exposing URL/branch/dir as flags, reuse the existing [template|URL] arg,
+		// and allow additional args for branch and repo dir.
+		cmd.PersistentFlags().StringVar(
+			&gitRepoURL, "git-repo-url", "",
+			"Git repo URL")
+		cmd.PersistentFlags().StringVar(
+			&gitBranch, "git-branch", "",
+			"Git branch")
+		cmd.PersistentFlags().StringVar(
+			&gitRepoDir, "git-repo-dir", "",
+			"Git repo directory")
+		cmd.PersistentFlags().StringVar(
+			&gitAuthAccessToken, "git-auth-access-token", "",
+			"Git auth access token")
+		// TODO add flags for the other git-related auth options.
+	}
 
 	if hasDebugCommands() {
 		cmd.PersistentFlags().StringVar(

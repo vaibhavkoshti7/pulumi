@@ -197,6 +197,10 @@ type EngineEvent struct {
 	// Timestamp is a Unix timestamp (seconds) of when the event was emitted.
 	Timestamp int `json:"timestamp"`
 
+	// Type describes which payload object is associated with the event, such that in JavaScript
+	// `event[event.type]` is never undefined/null.
+	Type string `json:"type,omitempty"`
+
 	CancelEvent      *CancelEvent       `json:"cancelEvent,omitempty"`
 	StdoutEvent      *StdoutEngineEvent `json:"stdoutEvent,omitempty"`
 	DiagnosticEvent  *DiagnosticEvent   `json:"diagnosticEvent,omitempty"`
@@ -211,4 +215,17 @@ type EngineEvent struct {
 // EngineEventBatch is a group of engine events.
 type EngineEventBatch struct {
 	Events []EngineEvent `json:"events"`
+}
+
+// GetUpdateEventsResponse contains the engine events for am update.
+type GetUpdateEventsResponse struct {
+	// Events are returned sorted by their internal sequence number (not exposed to the API).
+	// So the last Event in the slice is the most recent event which was stored in the database.
+	// (Should sort identical to timestamp, but may not if we support parallel writes.)
+	Events []EngineEvent `json:"events"`
+
+	// ContinuationToken is an opaque value the client can send to fetch more recent
+	// events if the update is still in progress. Will be nil once all events have
+	// been returned and the update is complete.
+	ContinuationToken *string `json:"continuationToken"`
 }
