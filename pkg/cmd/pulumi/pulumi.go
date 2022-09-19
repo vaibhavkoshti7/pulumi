@@ -352,6 +352,7 @@ func NewPulumiCmd() *cobra.Command {
 				newViewTraceCmd(),
 				newConvertTraceCmd(),
 				newReplayEventsCmd(),
+				newHostEngineCmd(),
 			},
 		},
 	})
