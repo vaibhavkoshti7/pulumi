@@ -175,6 +175,7 @@ func (e *Formatter) Fgen(w io.Writer, vs ...interface{}) {
 func (e *Formatter) Fgenf(w io.Writer, format string, args ...interface{}) {
 	for i := range args {
 		if node, ok := args[i].(model.Expression); ok {
+			fmt.Printf("before modify, format %v, for %v\n", format, args[0])
 			args[i] = Func(func(f fmt.State, c rune) {
 				parentPrecedence := 0
 				if pp, ok := f.Precision(); ok {
@@ -183,6 +184,7 @@ func (e *Formatter) Fgenf(w io.Writer, format string, args ...interface{}) {
 				rhs := c == 'o'
 				e.gen(f, parentPrecedence, rhs, node)
 			})
+			fmt.Printf("after modify, format %v, for %v\n", format, args[0])
 		}
 	}
 	fmt.Fprintf(w, format, args...)

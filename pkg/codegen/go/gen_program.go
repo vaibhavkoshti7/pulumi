@@ -647,6 +647,7 @@ func (g *generator) genResource(w io.Writer, r *pcl.Resource) {
 		g.diagnostics = append(g.diagnostics, diagnostics...)
 		expr, temps := g.lowerExpression(input.Value, destType.(model.Type))
 		input.Value = expr
+		fmt.Printf("input val set to %v\n", input.Value)
 		g.genTemps(w, temps)
 	}
 
@@ -672,6 +673,7 @@ func (g *generator) genResource(w io.Writer, r *pcl.Resource) {
 		if len(r.Inputs) > 0 {
 			g.Fgenf(w, "&%s.%sArgs{\n", modOrAlias, typ)
 			for _, attr := range r.Inputs {
+				fmt.Printf("attr name %v, val %v\n", attr.Name, attr.Value)
 				g.Fgenf(w, "%s: ", strings.Title(attr.Name))
 				g.Fgenf(w, "%.v,\n", attr.Value)
 
