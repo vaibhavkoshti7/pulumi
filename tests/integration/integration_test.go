@@ -663,6 +663,7 @@ func testComponentProviderSchema(t *testing.T, path string) {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
+
 			// Start the plugin binary.
 			cmd := exec.Command(path, "ignored")
 			cmd.Env = append(os.Environ(), test.env...)

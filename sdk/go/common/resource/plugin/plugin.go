@@ -17,10 +17,12 @@ package plugin
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -41,6 +43,7 @@ import (
 	"github.com/pulumi/pulumi/sdk/v3/go/common/util/contract"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/util/logging"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/util/rpcutil"
+	"github.com/pulumi/pulumi/sdk/v3/go/common/workspace"
 )
 
 // PulumiPluginJSON represents additional information about a package's associated Pulumi plugin.
@@ -173,7 +176,8 @@ func dialPlugin(port, bin, prefix string) (*grpc.ClientConn, error) {
 	return conn, nil
 }
 
-func newPlugin(ctx *Context, pwd, bin, prefix string, args, env []string, options ...otgrpc.Option) (*plugin, error) {
+func newPlugin(ctx *Context, pwd, bin, prefix string, kind workspace.PluginKind,
+	args, env []string, options ...otgrpc.Option) (*plugin, error) {
 	if logging.V(9) {
 		var argstr string
 		for i, arg := range args {
@@ -186,7 +190,7 @@ func newPlugin(ctx *Context, pwd, bin, prefix string, args, env []string, option
 	}
 
 	// Try to execute the binary.
-	plug, err := execPlugin(bin, args, pwd, env)
+	plug, err := execPlugin(ctx, bin, prefix, kind, args, pwd, env)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to load plugin %s", bin)
 	}
@@ -294,7 +298,8 @@ func newPlugin(ctx *Context, pwd, bin, prefix string, args, env []string, option
 }
 
 // execPlugin starts the plugin executable.
-func execPlugin(bin string, pluginArgs []string, pwd string, env []string) (*plugin, error) {
+func execPlugin(ctx *Context, bin, prefix string, kind workspace.PluginKind,
+	pluginArgs []string, pwd string, env []string) (*plugin, error) {
 	args := buildPluginArguments(pluginArgumentOptions{
 		pluginArgs:      pluginArgs,
 		tracingEndpoint: cmdutil.TracingEndpoint,
@@ -303,6 +308,57 @@ func execPlugin(bin string, pluginArgs []string, pwd string, env []string) (*plu
 		logToStderr:     logging.LogToStderr,
 		verbose:         logging.Verbose,
 	})
+
+	// Check to see if we have a binary we can invoke directly
+	if _, err := os.Stat(bin); os.IsNotExist(err) {
+		// If we don't have the expected binary, see if we have a "PulumiPlugin.yaml" or "PulumiPolicy.yaml"
+		pluginDir := filepath.Dir(bin)
+
+		var runtimeInfo workspace.ProjectRuntimeInfo
+		if kind == workspace.ResourcePlugin {
+			proj, err := workspace.LoadPluginProject(filepath.Join(pluginDir, "PulumiPlugin.yaml"))
+			if err != nil {
+				return nil, fmt.Errorf("loading PulumiPlugin.yaml: %w", err)
+			}
+			runtimeInfo = proj.Runtime
+		} else if kind == workspace.AnalyzerPlugin {
+			proj, err := workspace.LoadPluginProject(filepath.Join(pluginDir, "PulumiPolicy.yaml"))
+			if err != nil {
+				return nil, fmt.Errorf("loading PulumiPolicy.yaml: %w", err)
+			}
+			runtimeInfo = proj.Runtime
+		} else {
+			return nil, fmt.Errorf("language plugins must be executable binaries")
+		}
+
+		logging.V(9).Infof("Launching plugin '%v' from '%v' via runtime '%s'", prefix, pluginDir, runtimeInfo.Name())
+
+		runtime, err := ctx.Host.LanguageRuntime(pluginDir, pluginDir, runtimeInfo.Name(), runtimeInfo.Options())
+		if err != nil {
+			return nil, errors.Wrap(err, "loading runtime")
+		}
+
+		stdout, stderr, kill, err := runtime.RunPlugin(RunPluginInfo{
+			Pwd:     pwd,
+			Program: pluginDir,
+			Args:    pluginArgs,
+			Env:     env,
+		})
+
+		if err != nil {
+			return nil, err
+		}
+
+		return &plugin{
+			Bin:    bin,
+			Args:   args,
+			Env:    env,
+			Kill:   func() error { kill(); return nil },
+			Stdout: io.NopCloser(stdout),
+			Stderr: io.NopCloser(stderr),
+		}, nil
+	}
+
 	cmd := exec.Command(bin, args...)
 	cmdutil.RegisterProcessGroup(cmd)
 	cmd.Dir = pwd
