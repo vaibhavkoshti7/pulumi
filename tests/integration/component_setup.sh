@@ -39,11 +39,22 @@ setup_nodejs() (
   fi
 )
 
+# cd testcomponent-go && go build -o out && \
+#   pulumi plugin install resource testcomponent v0.1.0 --reinstall -f out && \
+#   cd .. && cd testcomponent2-go && go build -o out && \
+#   pulumi plugin install resource secondtestcomponent v0.1.0 --reinstall -f out && \
+#   cd .. && cd go && pulumi up || cd ..
 setup_go() (
   set -euo pipefail
   if [ -d "testcomponent-go" ]; then
     cd testcomponent-go
     go build -o "pulumi-resource-testcomponent$(go env GOEXE)"
+    cd ..
+  fi
+  if [ -d "testcomponent2-go" ]; then
+    cd testcomponent2-go
+    go build -o "pulumi-resource-secondtestcomponent$(go env GOEXE)"
+    cd ..
   fi
 )
 

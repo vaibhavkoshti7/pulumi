@@ -471,17 +471,18 @@ func (d *defaultProviders) getDefaultProviderRef(req providers.ProviderRequest) 
 // resmon implements the pulumirpc.ResourceMonitor interface and acts as the gateway between a language runtime's
 // evaluation of a program and the internal resource planning and deployment logic.
 type resmon struct {
-	diagostics                diag.Sink                          // logger for user-facing messages
-	providers                 ProviderSource                     // the provider source itself.
-	defaultProviders          *defaultProviders                  // the default provider manager.
-	constructInfo             plugin.ConstructInfo               // information for construct and call calls.
-	regChan                   chan *registerResourceEvent        // the channel to send resource registrations to.
-	regOutChan                chan *registerResourceOutputsEvent // the channel to send resource output registrations to.
-	regReadChan               chan *readResourceEvent            // the channel to send resource reads to.
-	cancel                    chan bool                          // a channel that can cancel the server.
-	done                      chan error                         // a channel that resolves when the server completes.
-	disableResourceReferences bool                               // true if resource references are disabled.
-	disableOutputValues       bool                               // true if output values are disabled.
+	diagostics                 diag.Sink                          // logger for user-facing messages
+	providers                  ProviderSource                     // the provider source itself.
+	componentResourceProviders map[resource.URN]map[string]string // which providers component resources used
+	defaultProviders           *defaultProviders                  // the default provider manager.
+	constructInfo              plugin.ConstructInfo               // information for construct and call calls.
+	regChan                    chan *registerResourceEvent        // the channel to send resource registrations to.
+	regOutChan                 chan *registerResourceOutputsEvent // the channel to send resource output registrations to.
+	regReadChan                chan *readResourceEvent            // the channel to send resource reads to.
+	cancel                     chan bool                          // a channel that can cancel the server.
+	done                       chan error                         // a channel that resolves when the server completes.
+	disableResourceReferences  bool                               // true if resource references are disabled.
+	disableOutputValues        bool                               // true if output values are disabled.
 }
 
 var _ SourceResourceMonitor = (*resmon)(nil)
@@ -506,15 +507,16 @@ func newResourceMonitor(src *evalSource, provs ProviderSource, regChan chan *reg
 
 	// New up an engine RPC server.
 	resmon := &resmon{
-		diagostics:                src.plugctx.Diag,
-		providers:                 provs,
-		defaultProviders:          d,
-		regChan:                   regChan,
-		regOutChan:                regOutChan,
-		regReadChan:               regReadChan,
-		cancel:                    cancel,
-		disableResourceReferences: opts.DisableResourceReferences,
-		disableOutputValues:       opts.DisableOutputValues,
+		diagostics:                 src.plugctx.Diag,
+		providers:                  provs,
+		defaultProviders:           d,
+		componentResourceProviders: map[resource.URN]map[string]string{},
+		regChan:                    regChan,
+		regOutChan:                 regOutChan,
+		regReadChan:                regReadChan,
+		cancel:                     cancel,
+		disableResourceReferences:  opts.DisableResourceReferences,
+		disableOutputValues:        opts.DisableOutputValues,
 	}
 
 	// Fire up a gRPC server and start listening for incomings.
@@ -959,6 +961,20 @@ func (rm *resmon) RegisterResource(ctx context.Context,
 		t = tokens.Type(req.GetType())
 	}
 
+	// We handle update the provides map to include the providers field of the parent if
+	// both the current resource and its parent is a component resource.
+	if parentsProviders, parentIsComponent := rm.componentResourceProviders[parent]; !custom &&
+		parent != "" && parentIsComponent {
+		for k, v := range parentsProviders {
+			if req.Providers == nil {
+				req.Providers = map[string]string{}
+			}
+			if _, ok := req.Providers[k]; !ok {
+				req.Providers[k] = v
+			}
+		}
+	}
+
 	label := fmt.Sprintf("ResourceMonitor.RegisterResource(%s,%s)", t, name)
 
 	var providerRef providers.Reference
@@ -1115,6 +1131,13 @@ func (rm *resmon) RegisterResource(ctx context.Context,
 
 	// If this is a remote component, fetch its provider and issue the construct call. Otherwise, register the resource.
 	var result *RegisterResult
+	if !custom {
+		defer func() {
+			if result != nil && result.State != nil && result.State.URN != "" {
+				rm.componentResourceProviders[result.State.URN] = req.GetProviders()
+			}
+		}()
+	}
 	var outputDeps map[string]*pulumirpc.RegisterResourceResponse_PropertyDependencies
 	if remote {
 		provider, ok := rm.providers.GetProvider(providerRef)
