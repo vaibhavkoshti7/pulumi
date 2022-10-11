@@ -74,15 +74,20 @@ func createDeployment(ctx context.Context, opts backend.UpdateOptions, operation
 		env[k] = v
 	}
 
+	var gitAuth *apitype.GitAuthConfig
+	if gitAuthAccessToken != "" {
+		gitAuth = &apitype.GitAuthConfig{
+			PersonalAccessToken: &gitAuthAccessToken,
+		}
+	}
+
 	req := apitype.CreateDeploymentRequest{
 		Source: &apitype.SourceContext{
 			Git: &apitype.SourceContextGit{
 				RepoURL: gitRepoURL,
 				Branch:  gitBranch,
 				RepoDir: gitRepoDir,
-				GitAuth: &apitype.GitAuthConfig{
-					PersonalAccessToken: &gitAuthAccessToken,
-				},
+				GitAuth: gitAuth,
 			},
 		},
 		Operation: apitype.OperationContext{
