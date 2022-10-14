@@ -46,7 +46,9 @@ func New(name, version string) Reporter {
 	return &reporter{
 		data: Summary{
 			Name:    name,
-			Version: version}}
+			Version: version,
+		},
+	}
 }
 
 type Summary struct {
@@ -75,6 +77,7 @@ type Language struct {
 	// A mapping from title:files
 	Files map[string][]string `json:"files,omitempty"`
 }
+
 type reporter struct {
 	data     Summary
 	reported bool
@@ -88,14 +91,14 @@ func (s *Stats) update(succeed bool) {
 	}
 }
 
-func (s *Summary) getLanguage(lang string) *Language {
-	if s.Languages == nil {
-		s.Languages = map[string]*Language{}
+func (r *reporter) getLanguage(lang string) *Language {
+	if r.data.Languages == nil {
+		r.data.Languages = map[string]*Language{}
 	}
-	l, ok := s.Languages[lang]
+	l, ok := r.data.Languages[lang]
 	if !ok {
 		l = new(Language)
-		s.Languages[lang] = l
+		r.data.Languages[lang] = l
 	}
 	return l
 
@@ -116,14 +119,14 @@ func (r *reporter) report(title, language string, files []*syntax.File, diags hc
 	defer r.m.Unlock()
 	if panicErr := recover(); panicErr != nil {
 		if panic, ok := panicErr.(error); ok {
-			err = panic
+			err = fmt.Errorf("panic: %w", panic)
 		} else {
 			err = fmt.Errorf("panic: %v", panicErr)
 		}
 	}
 	failed := diags.HasErrors() || err != nil
 	r.data.Stats.update(!failed)
-	lang := r.data.getLanguage(language)
+	lang := r.getLanguage(language)
 	lang.Stats.update(!failed)
 
 	if err != nil {
@@ -131,22 +134,25 @@ func (r *reporter) report(title, language string, files []*syntax.File, diags hc
 		lang.GoErrors[title] = err
 	}
 
-	incr := func(m map[string]map[string]int, key string) {
-		if m[key] == nil {
-			m[key] = map[string]int{}
+	incr := func(m *map[string]map[string]int, key string) {
+		if (*m) == nil {
+			*m = map[string]map[string]int{}
 		}
-		m[key][title]++
+		if (*m)[key] == nil {
+			(*m)[key] = map[string]int{}
+		}
+		(*m)[key][title]++
 	}
 
 	for _, diag := range diags {
 		switch diag.Severity {
 		case hcl.DiagError:
-			incr(lang.Errors, diag.Error())
+			incr(&lang.Errors, diag.Error())
 		case hcl.DiagWarning:
-			incr(lang.Warnings, diag.Error())
+			incr(&lang.Warnings, diag.Error())
 		case hcl.DiagInvalid:
 			msg := fmt.Sprintf("invalid diag: %v", diag)
-			incr(lang.Errors, msg)
+			incr(&lang.Errors, msg)
 		}
 	}
 }
@@ -207,7 +213,7 @@ func (r *reporter) defaultExport(dir string) error {
 		return err
 	}
 
-	name := fmt.Sprintf("%s-%s.json", r.data.Name, time.Now().Format("2001-06-01"))
+	name := fmt.Sprintf("%s-%s.json", r.data.Name, time.Now().Format("2006-01-02-15:04:05"))
 	path := filepath.Join(dir, name)
 	data, err := json.MarshalIndent(r.summary(), "", "    ")
 	if err != nil {
