@@ -75,7 +75,12 @@ type Language struct {
 	GoErrors map[string]string `json:"goerrors,omitempty"`
 
 	// A mapping from title:files
-	Files map[string][]string `json:"files,omitempty"`
+	Files map[string][]File `json:"files,omitempty"`
+}
+
+type File struct {
+	Name string `json:"name,omitempty"`
+	Body string `json:"body,omitempty"`
 }
 
 type reporter struct {
@@ -101,7 +106,6 @@ func (r *reporter) getLanguage(lang string) *Language {
 		r.data.Languages[lang] = l
 	}
 	return l
-
 }
 
 // Report a new call to GenerateProgram. Every call should be reported.
@@ -129,6 +133,19 @@ func (r *reporter) report(title, language string, files []*syntax.File, diags hc
 	lang := r.getLanguage(language)
 	lang.Stats.update(!failed)
 
+	if failed {
+		var txts []File
+		for _, file := range files {
+			txts = append(txts, File{
+				Name: file.Name,
+				Body: string(file.Bytes),
+			})
+		}
+		if lang.Files == nil {
+			lang.Files = map[string][]File{}
+		}
+		lang.Files[title] = txts
+	}
 	if err != nil {
 		err := fmt.Sprintf("error: %v", err)
 		lang.GoErrors[title] = err
