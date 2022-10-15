@@ -12,7 +12,7 @@ from .. import _utilities
 __all__ = ['FOOEncryptedBarClassArgs', 'FOOEncryptedBarClass']
 
 @pulumi.input_type
-class FooencryptedBarClassArgs:
+class FOOEncryptedBarClassArgs:
     def __init__(__self__):
         """
         The set of arguments for constructing a FOOEncryptedBarClass resource.
