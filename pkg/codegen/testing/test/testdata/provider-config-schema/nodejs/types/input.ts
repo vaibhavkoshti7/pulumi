@@ -7,4 +7,4 @@ import * as outputs from "../types/output";
 import * as enums from "../types/enums";
 import * as utilities from "../utilities";
 
-export * as config from "./config";
+export * as config from "./config/input";

@@ -12,4 +12,4 @@ export interface Child {
     name?: string;
 }
 
-export * as config from "./config";
+export * as config from "./config/output";
